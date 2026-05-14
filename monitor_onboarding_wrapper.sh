@@ -841,7 +841,7 @@ automation_start_preapproved() {
     [[ "${GASCAN_CONFIRM_AUTOMATION:-}" =~ ^([Yy]|[Yy][Ee][Ss]|1|[Tt][Rr][Uu][Ee])$ ]]
 }
 
-# Prints one of: proceed, skip, quit (stdout). Interactive only; caller must gate on -t 0.
+# Prints one of: proceed, quit (stdout). Interactive only; caller must gate on -t 0.
 prompt_onboarding_step_start() {
     local step_number="$1"
     local total="$2"
@@ -853,13 +853,12 @@ prompt_onboarding_step_start() {
     print_info "Command: gascan ${gascan_args}" >&2
 
     while true; do
-        read -r -p "Proceed with this step? [y]es / [s]kip / [q]uit: " choice || { echo quit; return 0; }
+        read -r -p "Proceed with this step? [y/N]: " choice || { echo quit; return 0; }
         case "$choice" in
             [yY]|[yY][eE][sS]) echo proceed; return 0 ;;
-            [sS]|[sS][kK][iI][pP]) echo skip; return 0 ;;
-            [qQ]|[qQ][uU][iI][tT]) echo quit; return 0 ;;
+            ""|[nN]|[nN][oO]) echo quit; return 0 ;;
             *)
-                print_warning "Invalid choice. Enter y, s, or q."
+                print_warning "Invalid choice. Enter y or n."
                 ;;
         esac
     done
@@ -922,14 +921,6 @@ run_onboarding_steps() {
             pre_step_action="$(prompt_onboarding_step_start "$((i + 1))" "$total" "$description" "$gascan_args")"
             case "$pre_step_action" in
                 proceed)
-                    ;;
-                skip)
-                    skipped_descriptions+=("$description")
-                    skipped_gascan_args+=("$gascan_args")
-                    ONBOARDING_STEPS_WERE_SKIPPED=1
-                    print_warning "Skipped step $((i + 1))/${total}: ${description}"
-                    ((i++)) || true
-                    continue
                     ;;
                 quit)
                     print_info "No command was run for step $((i + 1))/${total}."
@@ -1042,13 +1033,6 @@ confirm_automation_start() {
         print_info "  $((idx + 1)). ${description}"
         print_info "     Command: gascan ${gascan_args}"
     done
-
-    local proceed
-    read -r -p "Proceed with gascan onboarding automation? [y/N]: " proceed
-    if [[ ! "$proceed" =~ ^[Yy]$ ]]; then
-        print_warning "Gascan onboarding automation aborted by user before start."
-        exit 0
-    fi
 }
 
 #=============================================

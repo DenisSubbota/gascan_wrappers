@@ -134,8 +134,7 @@ gascan --playbook configs.yaml --tags=connect,netrc --limit=monitors
 In an interactive terminal, each step asks for confirmation before running:
 
 - `y` to run the step.
-- `s` to skip the step and continue.
-- `q` to quit and resume later from the same step.
+- `n` or Enter to stop before running the step.
 
 If a step fails, the script offers:
 
