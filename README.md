@@ -110,6 +110,12 @@ After fixing the failed condition, continue from the saved step:
 ./monitor_onboarding_wrapper.sh --resume
 ```
 
+For the remote one-command runner, pass `--resume` after a placeholder `$0` value:
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/DenisSubbota/gascan_wrappers/main/monitor_onboarding_wrapper.sh)" gascan-wrapper --resume
+```
+
 Resume mode skips fresh setup and continues the onboarding playbook phase. It still
 performs idempotent runtime checks such as SELinux handling and user linger setup.
 

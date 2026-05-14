@@ -809,6 +809,34 @@ clear_onboarding_progress() {
     rm -f "$ONBOARDING_PROGRESS_FILE" 2>/dev/null || true
 }
 
+get_saved_onboarding_step() {
+    local saved_step
+
+    if [[ ! -f "$ONBOARDING_PROGRESS_FILE" ]]; then
+        echo ""
+        return 0
+    fi
+
+    saved_step="$(cat "$ONBOARDING_PROGRESS_FILE" 2>/dev/null || true)"
+    if [[ ! "$saved_step" =~ ^[0-9]+$ ]]; then
+        saved_step=0
+    fi
+
+    echo "$saved_step"
+}
+
+resolve_onboarding_start_step() {
+    local total=${#ONBOARDING_STEPS[@]}
+    local saved_step
+
+    saved_step="$(get_saved_onboarding_step)"
+    if [[ -z "$saved_step" || "$saved_step" -ge "$total" ]]; then
+        echo 0
+    else
+        echo "$saved_step"
+    fi
+}
+
 # Prints one of: retry, skip, quit (stdout). Interactive only; caller must gate on -t 0.
 prompt_onboarding_step_failure() {
     local choice
@@ -828,22 +856,27 @@ prompt_onboarding_step_failure() {
 run_onboarding_steps() {
     local start_step=0
     local total=${#ONBOARDING_STEPS[@]}
+    local saved_step
     local i
     local -a skipped_descriptions=()
     local -a skipped_gascan_args=()
 
     ONBOARDING_STEPS_WERE_SKIPPED=0
 
-    if [[ "$RESUME_MODE" -eq 1 && -f "$ONBOARDING_PROGRESS_FILE" ]]; then
-        start_step="$(cat "$ONBOARDING_PROGRESS_FILE" 2>/dev/null || echo 0)"
-        if [[ "$start_step" -ge "$total" ]]; then
-            print_info "All onboarding steps were already completed. Starting fresh."
-            start_step=0
+    if [[ "$RESUME_MODE" -eq 1 ]]; then
+        saved_step="$(get_saved_onboarding_step)"
+        if [[ -z "$saved_step" ]]; then
+            print_warning "No progress file found. Starting onboarding from the beginning."
         else
-            print_info "Resuming onboarding from step $((start_step + 1))/${total}."
+            start_step="$(resolve_onboarding_start_step)"
+
+            if [[ "$saved_step" -ge "$total" ]]; then
+                print_info "All onboarding steps were already completed. Starting fresh."
+                start_step=0
+            else
+                print_info "Resuming onboarding from step $((start_step + 1))/${total}."
+            fi
         fi
-    elif [[ "$RESUME_MODE" -eq 1 ]]; then
-        print_warning "No progress file found. Starting onboarding from the beginning."
     fi
 
     print_info "Running gascan onboarding (${total} steps)..."
@@ -908,6 +941,10 @@ run_onboarding_steps() {
 }
 
 confirm_automation_start() {
+    local start_step=0
+    local total=${#ONBOARDING_STEPS[@]}
+    local saved_step
+
     if [[ "${GASCAN_CONFIRM_AUTOMATION:-}" =~ ^([Yy]|[Yy][Ee][Ss]|1|[Tt][Rr][Uu][Ee])$ ]]; then
         print_info "Automation start pre-approved by GASCAN_CONFIRM_AUTOMATION."
         return 0
@@ -921,10 +958,33 @@ confirm_automation_start() {
 
     print_warning "The next phase will run gascan onboarding automation."
     print_info "No automation commands have started yet."
+
+    if [[ "$RESUME_MODE" -eq 1 ]]; then
+        saved_step="$(get_saved_onboarding_step)"
+        if [[ -z "$saved_step" ]]; then
+            print_warning "Resume mode requested, but no progress file was found. Automation will start from step 1/${total}."
+        else
+            start_step="$(resolve_onboarding_start_step)"
+            if [[ "$saved_step" -ge "$total" ]]; then
+                print_info "Saved progress indicates all steps were already completed. Automation will start fresh from step 1/${total}."
+            else
+                local resume_entry="${ONBOARDING_STEPS[$start_step]}"
+                local resume_description="${resume_entry%%|*}"
+                local resume_gascan_args="${resume_entry#*|}"
+                print_info "Resume mode will start from step $((start_step + 1))/${total}: ${resume_description}"
+                print_info "First command: gascan ${resume_gascan_args}"
+            fi
+        fi
+    fi
+
     print_info "The following automations will run in order:"
 
     local idx
     for idx in "${!ONBOARDING_STEPS[@]}"; do
+        if [[ "$idx" -lt "$start_step" ]]; then
+            continue
+        fi
+
         local entry="${ONBOARDING_STEPS[$idx]}"
         local description="${entry%%|*}"
         local gascan_args="${entry#*|}"
