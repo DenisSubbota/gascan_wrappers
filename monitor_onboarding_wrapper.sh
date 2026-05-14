@@ -837,6 +837,34 @@ resolve_onboarding_start_step() {
     fi
 }
 
+automation_start_preapproved() {
+    [[ "${GASCAN_CONFIRM_AUTOMATION:-}" =~ ^([Yy]|[Yy][Ee][Ss]|1|[Tt][Rr][Uu][Ee])$ ]]
+}
+
+# Prints one of: proceed, skip, quit (stdout). Interactive only; caller must gate on -t 0.
+prompt_onboarding_step_start() {
+    local step_number="$1"
+    local total="$2"
+    local description="$3"
+    local gascan_args="$4"
+    local choice
+
+    print_warning "Next automation step $step_number/${total}: ${description}"
+    print_info "Command: gascan ${gascan_args}" >&2
+
+    while true; do
+        read -r -p "Proceed with this step? [y]es / [s]kip / [q]uit: " choice || { echo quit; return 0; }
+        case "$choice" in
+            [yY]|[yY][eE][sS]) echo proceed; return 0 ;;
+            [sS]|[sS][kK][iI][pP]) echo skip; return 0 ;;
+            [qQ]|[qQ][uU][iI][tT]) echo quit; return 0 ;;
+            *)
+                print_warning "Invalid choice. Enter y, s, or q."
+                ;;
+        esac
+    done
+}
+
 # Prints one of: retry, skip, quit (stdout). Interactive only; caller must gate on -t 0.
 prompt_onboarding_step_failure() {
     local choice
@@ -888,6 +916,29 @@ run_onboarding_steps() {
         local gascan_args="${entry#*|}"
 
         save_onboarding_progress "$i"
+
+        if [[ -t 0 ]] && ! automation_start_preapproved; then
+            local pre_step_action
+            pre_step_action="$(prompt_onboarding_step_start "$((i + 1))" "$total" "$description" "$gascan_args")"
+            case "$pre_step_action" in
+                proceed)
+                    ;;
+                skip)
+                    skipped_descriptions+=("$description")
+                    skipped_gascan_args+=("$gascan_args")
+                    ONBOARDING_STEPS_WERE_SKIPPED=1
+                    print_warning "Skipped step $((i + 1))/${total}: ${description}"
+                    ((i++)) || true
+                    continue
+                    ;;
+                quit)
+                    print_info "No command was run for step $((i + 1))/${total}."
+                    print_info "Re-run with --resume to continue from this step:"
+                    print_info "  $0 --resume"
+                    exit 10
+                    ;;
+            esac
+        fi
 
         print_info "[Step $((i + 1))/${total}] ${description}..."
         print_info "  gascan ${gascan_args}"
@@ -945,7 +996,7 @@ confirm_automation_start() {
     local total=${#ONBOARDING_STEPS[@]}
     local saved_step
 
-    if [[ "${GASCAN_CONFIRM_AUTOMATION:-}" =~ ^([Yy]|[Yy][Ee][Ss]|1|[Tt][Rr][Uu][Ee])$ ]]; then
+    if automation_start_preapproved; then
         print_info "Automation start pre-approved by GASCAN_CONFIRM_AUTOMATION."
         return 0
     fi

@@ -95,6 +95,7 @@ different values.
 
 Non-interactive runs require `GASCAN_CONFIRM_AUTOMATION=1`. If a playbook step fails
 without an interactive TTY, the script exits and prints the resume command.
+This variable also pre-approves each playbook step confirmation.
 
 ## Resume After Failure
 
@@ -130,7 +131,13 @@ gascan --limit=monitors --playbook=tools.yaml
 gascan --playbook configs.yaml --tags=connect,netrc --limit=monitors
 ```
 
-In an interactive terminal, a failed step offers:
+In an interactive terminal, each step asks for confirmation before running:
+
+- `y` to run the step.
+- `s` to skip the step and continue.
+- `q` to quit and resume later from the same step.
+
+If a step fails, the script offers:
 
 - `r` to retry the same step.
 - `s` to skip the step and continue.
