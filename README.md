@@ -54,6 +54,14 @@ Optional but used when available:
 
 ## Quick Start
 
+Run the latest public wrapper directly:
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/DenisSubbota/gascan_wrappers/main/monitor_onboarding_wrapper.sh)"
+```
+
+If you already cloned this repository, run it locally:
+
 ```bash
 chmod +x monitor_onboarding_wrapper.sh
 ./monitor_onboarding_wrapper.sh
