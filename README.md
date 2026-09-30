@@ -1,7 +1,7 @@
 # Gascan Onboarding Wrapper
 
 `monitor_onboarding_wrapper.sh` automates the initial Gascan monitor onboarding flow.
-It installs the correct Gascan binary for the host OS, configures SN inventory access,
+It installs the Gascan binary, configures SN inventory access,
 prepares local environment settings, and runs the required Gascan playbooks for PMM
 server/client setup.
 
@@ -14,7 +14,7 @@ server/client setup.
 - Adds default PMM database credentials to `~/.config/gascan/secrets.yaml` when needed.
 - Detects external PMM server settings and stores validated PMM admin credentials.
 - Handles missing passwordless sudo by storing the sudo password for Ansible use.
-- Adds useful Gascan aliases and environment variables to `~/.bashrc`.
+- Adds Gascan tool aliases and the `amtool` filter to `~/.bashrc`. Environment variables and the colored prompt are written by `gascan --extract-bundle` itself (gascan v1.28.0+).
 - Works around `/tmp` mounted with `noexec` by using `~/tmp`.
 - Optionally sets SELinux to permissive when SELinux may block automation.
 - Enables user linger with `loginctl enable-linger`.
@@ -22,7 +22,7 @@ server/client setup.
 
 ## Supported Operating Systems
 
-The wrapper downloads the Gascan binary for these Linux distributions:
+Since gascan v1.28.0 there is one binary for all Linux distributions (`https://cdba.percona.com/downloads/gascan/<version>/amd64/gascan`). The wrapper still checks that the host is one of:
 
 - CentOS Stream / RHEL / Oracle Linux / Rocky Linux 9
 - Ubuntu 22.04
@@ -69,7 +69,7 @@ chmod +x monitor_onboarding_wrapper.sh
 
 The script prompts for:
 
-- Gascan version, defaulting to `v1.24.0`.
+- Gascan version, defaulting to `v1.28.0` (`latest` is also accepted).
 - Monitor node name as created in SN.
 - SN `client_identifier`.
 - SN `api_key`.
@@ -82,7 +82,7 @@ The script prompts for:
 Prompt values can be provided with environment variables:
 
 ```bash
-GASCAN_VERSION="v1.24.0" \
+GASCAN_VERSION="v1.28.0" \
 MONITOR_NODE="my-monitor-node" \
 CLIENT_IDENTIFIER="64-character-client-identifier" \
 API_KEY="64-character-api-key" \

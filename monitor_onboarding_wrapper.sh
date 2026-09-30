@@ -8,8 +8,10 @@
 # - Configures external PMM server if detected
 # - Adds default PMM DB creds to vault on fresh onboarding (pmm/password)
 # - Configures passwordless sudo for gascan execution
-# - Sets up environment and customizations
+# - Adds tool aliases, amtool filter, sudo flag and TMPDIR to ~/.bashrc
+#   (env vars and colored prompt come from `gascan --extract-bundle` since v1.28.0)
 # - Handles /tmp noexec by exporting TMPDIR to an exec-capable dir
+# - Falls back to C.UTF-8 when the SSH-forwarded locale is missing on the host (minimal Debian)
 # - Detects SELinux and, upon confirmation, sets runtime permissive and persists permissive
 # - Supports --resume to continue from the step saved in ~/.config/gascan/.onboarding_step
 # - On a failed playbook step (interactive TTY): prompt to [r]etry, [s]kip, or [q]uit; skipped
@@ -34,7 +36,7 @@ set -euo pipefail
 #=============================================
 # 1. CONFIGURATION & CONSTANTS
 #=============================================
-readonly DEFAULT_GASCAN_VERSION="v1.24.0"
+readonly DEFAULT_GASCAN_VERSION="v1.28.0"
 readonly GASCAN_BIN=~/bin/gascan
 readonly GASCAN_BUNDLE_DIR=~/gascan_bundle
 readonly GASCAN_CONFIG_FILE=~/.config/gascan/config.yml
@@ -70,6 +72,25 @@ get_tmp_mount_options() {
 
 # Try a command as the current user, fall back to sudo
 run_or_sudo() { "$@" 2>/dev/null || sudo "$@" 2>/dev/null; }
+
+ensure_usable_locale() {
+    # SSH forwards LANG/LC_ALL from the laptop (e.g. en_US.UTF-8). A minimal image
+    # (Debian 13 ships only C, C.utf8, POSIX) does not have it. Then bash warns on every
+    # command and the ansible.pex inside gascan dies with
+    # "Ansible could not initialize the preferred locale: unsupported locale setting".
+    # Fall back to C.UTF-8 for this run when the forwarded locale is not on the host.
+    local var val
+    for var in LC_ALL LANG; do
+        val="${!var:-}"
+        [[ -z "$val" || "$val" == "C" || "$val" == "POSIX" ]] && continue
+        if ! locale -a 2>/dev/null | tr 'A-Z' 'a-z' | grep -qx "$(echo "${val/UTF-8/utf8}" | tr 'A-Z' 'a-z')"; then
+            print_warning "Locale $var=$val is not available on this host; using C.UTF-8 for this run."
+            print_info "Permanent fix: sudo sed -i 's/^# *en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen && sudo locale-gen"
+            export LC_ALL=C.UTF-8 LANG=C.UTF-8
+            return 0
+        fi
+    done
+}
 
 try_apt_update() {
     if command -v apt >/dev/null 2>&1 || command -v apt-get >/dev/null 2>&1; then
@@ -190,30 +211,21 @@ detect_os_and_set_url() {
     # Expects /etc/os-release to be sourced already (ID, VERSION_ID set).
     print_info "Detecting operating system..."
 
+    # Since gascan v1.28.0 (GAS-1351) the binary is a single Go build per CPU arch.
+    # One URL for every supported OS:
+    #   https://cdba.percona.com/downloads/gascan/<version>/amd64/gascan
+    # <version> is a release tag or "latest".
+    # The OS check below only guards against unsupported distributions.
     case "${ID,,}-${VERSION_ID}" in
-        centos-9*|rhel-9*|ol-9*|rocky-9*)
-            url="https://cdba.percona.com/downloads/gascan/${gascan_version}/linux/amd64/centos-stream9/gascan-py3.9"
-            ;;
-        ubuntu-22*)
-            url="https://cdba.percona.com/downloads/gascan/${gascan_version}/linux/amd64/ubuntu-jammy/gascan-py3.10"
-            ;;
-        ubuntu-24*)
-            url="https://cdba.percona.com/downloads/gascan/${gascan_version}/linux/amd64/ubuntu-noble/gascan-py3.12"
-            ;;
-        debian-11)
-            url="https://cdba.percona.com/downloads/gascan/${gascan_version}/linux/amd64/debian-bullseye/gascan-py3.9"
-            ;;
-        debian-12)
-            url="https://cdba.percona.com/downloads/gascan/${gascan_version}/linux/amd64/debian-bookworm/gascan-py3.11"
-            ;;
-        debian-13)
-            url="https://cdba.percona.com/downloads/gascan/${gascan_version}/linux/amd64/debian-trixie/gascan-py3.13"
+        centos-9*|rhel-9*|ol-9*|rocky-9*|ubuntu-22*|ubuntu-24*|debian-11|debian-12|debian-13)
             ;;
         *)
             print_error "Unsupported OS: ${ID,,}-${VERSION_ID}"
             exit 2
             ;;
     esac
+
+    url="https://cdba.percona.com/downloads/gascan/${gascan_version}/amd64/gascan"
 
     print_success "Detected OS: ${ID,,} ${VERSION_ID}"
 }
@@ -610,18 +622,15 @@ setup_environment() {
         store_sudo_password
     fi
 
-    if ! grep -q "SSH_MS_NAME" ~/.bashrc; then
+    # Since gascan v1.28.0 (GAS-1264) `gascan --extract-bundle` writes its own block to ~/.bashrc
+    # ("# BEGIN gascan environment" ... "# END gascan environment") with ANSIBLE_VAULT_PASSWORD_FILE,
+    # GASCAN_DEFAULT_INVENTORY, GASCAN_INVENTORY_CONFIG_FILE, PATH, HISTTIMEFORMAT, SSH_MS_NAME and PS1.
+    # gascan rewrites that block on every extract, so nothing of ours may live inside it.
+    # The wrapper only adds what gascan does not: tool aliases, the amtool filter, sudo flag, TMPDIR.
+    if ! grep -q "^# GAScan wrapper customizations" ~/.bashrc; then
         cat <<EOF >> ~/.bashrc
-# GAScan customizations
 
-RESET="\[\033[0m\]"
-COLOR_USER="\[\033[0;36m\]"
-COLOR_HOST="\[\033[1;31m\]"
-COLOR_DIR="\[\033[0;33m\]"
-COLOR_CMD="\[\033[0;37;00m\]"
-COLOR_CLIENT="\[\033[1;32m\]"
-SSH_MS_NAME="$monitor_node"
-
+# GAScan wrapper customizations
 # Useful aliases
 alias avv="ansible-vault view ~/.config/gascan/secrets.yaml"
 # db_tree, db/ssh_connect will work after gas_tools installation
@@ -629,12 +638,6 @@ alias db_tree='PEX_SCRIPT=db_tree.py ~/bin/gas-tools'
 alias amtool_wrapper='PEX_SCRIPT=amtool_wrapper.py ~/bin/gas-tools'
 alias db_connect='PEX_SCRIPT=connect.py ~/bin/gas-tools --connect-type dbc'
 alias ssh_connect='PEX_SCRIPT=connect.py ~/bin/gas-tools'
-
-export ANSIBLE_VAULT_PASSWORD_FILE='~/.config/gascan/.vault-key'
-export GASCAN_DEFAULT_INVENTORY=0
-export GASCAN_INVENTORY_CONFIG_FILE="$HOME/.config/gascan/inventory-config.json"
-export PATH=\$PATH:~/bin
-export HISTTIMEFORMAT="%F %T "
 
 amtool() {
   if [[ "\$1" == "alert" ]]; then
@@ -644,27 +647,26 @@ amtool() {
     command amtool "\$@"
   fi
 }
-
-export PS1="[\${COLOR_CLIENT}\${SSH_MS_NAME}\${RESET}] \${COLOR_USER}\u\${RESET}@\${COLOR_HOST}monitor-gascan\${RESET}: \${COLOR_DIR}\W \${RESET}\\$ \${COLOR_CMD}"
+# End GAScan wrapper customizations
 
 EOF
 
-        print_success ".bashrc updated with monitor node info and GAScan customizations."
+        print_success ".bashrc updated with GAScan wrapper customizations (aliases, amtool filter)."
     else
-        print_info ".bashrc already contains GAScan customizations."
+        print_info ".bashrc already contains GAScan wrapper customizations."
     fi
 
-    # Insert GASCAN_FLAG_PASSWORDLESS_SUDO before ANSIBLE_VAULT_PASSWORD_FILE if needed
+    # Plain append (idempotent). Not inserted into the gascan-managed block: gascan would wipe it.
     if [[ "$gascan_passwordless_sudo" == "1" ]] || [[ "$sudo_password_stored_in_vault" == "1" ]]; then
         grep -qxF 'export GASCAN_FLAG_PASSWORDLESS_SUDO=1' ~/.bashrc || \
-            sed -i "/^export ANSIBLE_VAULT_PASSWORD_FILE=/i export GASCAN_FLAG_PASSWORDLESS_SUDO=1" ~/.bashrc
+            echo 'export GASCAN_FLAG_PASSWORDLESS_SUDO=1' >> ~/.bashrc
     fi
 
-    # Insert TMPDIR after PATH if /tmp is noexec
+    # TMPDIR if /tmp is noexec. Plain append for the same reason.
     if [[ "$(get_tmp_mount_options)" == *noexec* ]]; then
         local alt_tmp="${TMPDIR:-$HOME/tmp}"
         grep -q '^export TMPDIR=' ~/.bashrc || \
-            sed -i "/^export PATH=.*:~\/bin/a export TMPDIR=\"$alt_tmp\"" ~/.bashrc
+            echo "export TMPDIR=\"$alt_tmp\"" >> ~/.bashrc
     fi
 }
 
@@ -1134,6 +1136,8 @@ main() {
 
     print_info "Starting Gascan Onboarding Process"
     print_info "=================================="
+
+    ensure_usable_locale
 
     if [[ "$RESUME_MODE" -eq 1 ]]; then
         print_info "Resume mode: skipping setup, continuing from last failed step."
